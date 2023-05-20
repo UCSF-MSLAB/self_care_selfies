@@ -42,8 +42,10 @@ the self_care_selfies.py code.
 
 This command line will show the usage:
 
+```
 $ self_care_selfies.py --help
 usage: python self_care_selfies.py [<video dir = 'videos'> [<output csv file = 'output.csv'> [<input csv file>]]]
+```
 
 The output is a csv file with metrics for each video.
 
