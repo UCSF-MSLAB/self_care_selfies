@@ -2,6 +2,7 @@ Self Care Selfies helps MS and other patients gain more insight into their healt
 
 To use this code, place the videos to be analyzed into a directory structure like this:
 
+```
 videos
   patient1
     01-01-2023
@@ -21,6 +22,7 @@ videos
       EatL.mov
       Button.mov
       Gait.mov
+```
 
 The name of the video file represents the activity being performed 
 by the patient. There are several supported activity types.
