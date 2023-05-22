@@ -224,8 +224,8 @@ def choose_video_type(activity):
 		result_processor = process_pose
 		lm_dict = poseDict
 		# select which features to process for Talk videos
-		# left foot (31) and right foot (32)
-		features = [31, 32]
+		# left/right eyes (1, 5) and left/right mouth (9, 10)
+		features = [1, 5, 9, 10]
 	else:
 		processor = mpHands.Hands(static_image_mode=False,
 			max_num_hands=2,
@@ -288,7 +288,7 @@ def get_video_data_crawling_dir(video_dir, ignore_set):
 			if not (ext == "mov" or ext == "mp4"):
 				continue
 			parents = dirpath.split("/")
-			participant, activity_date = parents[1:]
+			participant, activity_date = parents[-2:]
 			key = ignore_key(participant, activity_date, name)
 			if key in ignore_set:
 				continue
