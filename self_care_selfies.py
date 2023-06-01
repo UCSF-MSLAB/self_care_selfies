@@ -20,6 +20,7 @@ SWITCH_HANDS = {
 	"Right": "Left"
 }
 
+# landmarks for whole-body pose analysis
 poseDict = {
 	0: "nose",
 	1: "left_eye_inner",
@@ -56,6 +57,7 @@ poseDict = {
 	32: "right_foot_index"
 }
 
+# landmarks for hand analysis
 handDict = {
 	0: "wrist",
 	1: "thumb_cmc",
@@ -81,6 +83,7 @@ handDict = {
 }
 
 def count_peaks(landmarks, axis=1):
+	# count changes in direction for an array of landmark x,y values
 	num_peaks = 0
 	heading_down = False
 	for i, point1 in enumerate(landmarks[:-1]):
@@ -94,6 +97,7 @@ def count_peaks(landmarks, axis=1):
 	return num_peaks
 
 def count_velocity_peaks(landmarks):
+	# compute velocity for each pair of landmarks, then count changes
 	velocity = []
 	for i, point1 in enumerate(landmarks[:-1]):
 		point2 = landmarks[i + 1]
@@ -101,6 +105,7 @@ def count_velocity_peaks(landmarks):
 	return count_peaks(velocity)
 
 def distance(point1, point2):
+	# compute distance between 2 points. these can be 2, 3 or any dimensions
 	sum_of_squares = 0
 	for dim, val in enumerate(point1):
 		delta = val - point2[dim]
@@ -108,9 +113,11 @@ def distance(point1, point2):
 	return math.sqrt(sum_of_squares)
 
 def displacement(landmark):
+	# find distance between first and last landmark points
 	return distance(landmark[0], landmark[-1])
 
 def total_travel(landmarks):
+	# sum of distances between adjacent points the landmark travels
 	travel = 0
 	for i, point1 in enumerate(landmarks[:-1]):
 		point2 = landmarks[i + 1]
@@ -118,9 +125,11 @@ def total_travel(landmarks):
 	return travel
 
 def average_velocity(landmarks):
+	# computer average velocity (average of distance between adjacent images)
 	return total_travel(landmarks) / len(landmarks)
 
 def peak_velocity(landmarks):
+	# find the max velocity (distance between adjacent images in video)
 	peak_travel = 0
 	for i, point1 in enumerate(landmarks[:-1]):
 		point2 = landmarks[i + 1]
@@ -130,11 +139,13 @@ def peak_velocity(landmarks):
 	return peak_travel
 
 def hand_name(hand):
+	# flip hand (right -> left, etc.)
 	which_hand = hand.classification[0].label
 	which_hand = SWITCH_HANDS[which_hand]
 	return which_hand
 
 def process_pose(frame_num, video_landmark_data, results, img):
+	# given an image from a video, gather up landmark data for whole body Pose
 	h, w, _ = img.shape
 	if results.pose_landmarks:
 		for idx, lm in enumerate(results.pose_landmarks.landmark):
@@ -143,6 +154,7 @@ def process_pose(frame_num, video_landmark_data, results, img):
 			mp_pose.POSE_CONNECTIONS, landmark_drawing_spec=pose_drawing_style)
 
 def process_hand(frame_num, video_landmark_data, results, img):
+	# given an image from a video, gather up landmark data for hands
 	if not results.multi_handedness:
 		return []
 	h, w, _ = img.shape
@@ -156,6 +168,9 @@ def process_hand(frame_num, video_landmark_data, results, img):
 
 def process_frame(video_landmark_data, frame_num, 
 		processor, result_processor, img):
+	# process one frame from a video
+	# put results in video_landmark_data
+	# use processor to compute landmarks, and result_processor to store results
 	imgRGB = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 	results = processor.process(imgRGB)
 	result_processor(frame_num, video_landmark_data, results, img)
@@ -164,6 +179,8 @@ def process_frame(video_landmark_data, frame_num,
 
 def process_video(video, processor, result_processor, 
 		start_time_secs, end_time_secs):
+	# process an entire video, given the single image 'processor'
+	# and the method to store theresults
 	video_data = {
 		"Left": [],
 		"Right": [],
@@ -190,11 +207,15 @@ def process_video(video, processor, result_processor,
 	return video_data
 
 def get_video(participant, activity_date, activity_video, ext, video_dir):
+	# read the video at the path indicated by participant, activity_date,
+	# and name of activity_video/extension
 	video_file_path = os.path.join(video_dir, participant, activity_date, 
 		"{}.{}".format(activity_video, ext))
 	return cv2.VideoCapture(video_file_path)
 
 def compute_metrics(video_data, hand, feature):
+	# given analyzed video information (video_data), compute the set of
+	# setrics
 	if not video_data["data"][hand][feature]:
 		return None
 	landmarks = video_data["data"][hand][feature]
@@ -209,6 +230,8 @@ def compute_metrics(video_data, hand, feature):
 	return metrics
 
 def choose_video_type(activity):
+	# use filename to select processor method, result_processor method
+	# names of landmarks, and which features to compute
 	activity_lower = activity.lower()
 	if activity_lower.startswith("gait"):
 		processor = mp_pose.Pose(min_detection_confidence=0.5, 
@@ -241,6 +264,7 @@ def choose_video_type(activity):
 def process_video_for_participant_date_activity(
 		participant, activity_date, activity, ext,
 		start_time_secs, end_time_secs, video_dir):
+	# read video and process it, returning the metrics
 	print("processing {} performing {} on {}".format(
 		participant, activity, activity_date))
 	processor, result_processor, lm_dict, features = choose_video_type(activity)
@@ -257,6 +281,7 @@ def process_video_for_participant_date_activity(
 	return video_data
 
 def get_video_data_using_csv(csv_file, video_dir):
+	# read csv that specifies which videos to process, and process them
 	rows = []
 	with open(csv_file, 'r', encoding='utf-8-sig') as csvfile:
 		csvreader = csv.reader(csvfile)
@@ -277,9 +302,11 @@ def get_video_data_using_csv(csv_file, video_dir):
 	return all_video_data
 
 def ignore_key(participant, activity_date, activity):
+	# compute key for video so we can tell if we've already processed it
 	return "{}-{}-{}".format(participant, activity_date, activity)
 
 def get_video_data_crawling_dir(video_dir, ignore_set):
+	# crawl video directory and process videos not yet dealt with before
 	all_video_data = []
 	for (dirpath, dirnames, filenames) in os.walk(video_dir):
 		for filename in filenames:
@@ -299,6 +326,7 @@ def get_video_data_crawling_dir(video_dir, ignore_set):
 	return all_video_data
 
 def read_ignore_set(output_file):
+	# read the output data so we can tell which videos we've already processed
 	ignore_set = set()
 	rows = []
 	if os.path.exists(output_file):
@@ -316,6 +344,8 @@ def read_ignore_set(output_file):
 	return ignore_set, rows
 
 def process_all_videos(csv_file, video_dir, output_file):
+	# process all videos. If csv_file is provided, use that, otherwise
+	# crawl video_dir
 	output_rows = []
 	if csv_file:
 		all_video_data = get_video_data_using_csv(csv_file, video_dir)
@@ -352,22 +382,26 @@ def process_all_videos(csv_file, video_dir, output_file):
 
 
 def arg(args, i, default_value):
+	# get value of the ith command line arg, with a default if missing
 	if i < len(args):
 		return args[i]
 	return default_value
 
 def name_to_landmark(lm_dict, name):
+	# given a landmark name dictionary, look up landmark id for the given name
 	for landmark in lm_dict.keys():
 		if lm_dict[landmark] == name:
 			return landmark
 	return None
 
 def landmark_to_name(lm_dict, landmark):
+	# given a landmark name directory, get name for landmark
 	if landmark not in lm_dict:
 		return None
 	return lm_dict[landmark]
 
 def main():
+	# main program that reads command-line argumetns and processes videos
 	args = sys.argv[1:]
 	if len(args) == 1 and args[0] == "--help":
 		print("usage: python self_care_selfies.py [<video dir = 'videos'> [<output csv file = 'output.csv'> [<input csv file>]]]")
