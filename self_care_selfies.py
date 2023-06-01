@@ -401,7 +401,7 @@ def landmark_to_name(lm_dict, landmark):
 	return lm_dict[landmark]
 
 def main():
-	# main program that reads command-line argumetns and processes videos
+	# main program that reads command-line arguments and processes videos
 	args = sys.argv[1:]
 	if len(args) == 1 and args[0] == "--help":
 		print("usage: python self_care_selfies.py [<video dir = 'videos'> [<output csv file = 'output.csv'> [<input csv file>]]]")
