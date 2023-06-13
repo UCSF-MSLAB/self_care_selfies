@@ -219,6 +219,10 @@ def compute_metrics(video_data, hand, feature):
 	if not video_data["data"][hand][feature]:
 		return None
 	landmarks = video_data["data"][hand][feature]
+	if len(landmarks) < 2:
+		return None
+	if not peak_velocity(landmarks):
+		return None
 	metrics = {
 		"displacement": displacement(landmarks),
 		"total_travel": total_travel(landmarks),
@@ -305,6 +309,9 @@ def ignore_key(participant, activity_date, activity):
 	# compute key for video so we can tell if we've already processed it
 	return "{}-{}-{}".format(participant, activity_date, activity)
 
+def remove_prefix(s, prefix):
+    return s[len(prefix):] if s.startswith(prefix) else s
+
 def get_video_data_crawling_dir(video_dir, ignore_set):
 	# crawl video directory and process videos not yet dealt with before
 	all_video_data = []
@@ -314,7 +321,12 @@ def get_video_data_crawling_dir(video_dir, ignore_set):
 			ext = ext.lower()[1:]
 			if not (ext == "mov" or ext == "mp4"):
 				continue
-			parents = dirpath.split("/")
+			patient_date_path = remove_prefix(dirpath, video_dir)
+			patient_date_path = remove_prefix(patient_date_path, "/")
+			parents = patient_date_path.split("/")
+			if len(parents) != 2:
+				print("Video must be in a user/date subdir: {} / {}".format(patient_date_path, filename))
+				continue
 			participant, activity_date = parents[-2:]
 			key = ignore_key(participant, activity_date, name)
 			if key in ignore_set:
@@ -400,6 +412,12 @@ def landmark_to_name(lm_dict, landmark):
 		return None
 	return lm_dict[landmark]
 
+def valid_video_input_dir(video_dir):
+	if not os.path.isdir(video_dir):
+		print("Video directory doesn't exist: {}".format(video_dir))
+		return False
+	return True
+
 def main():
 	# main program that reads command-line arguments and processes videos
 	args = sys.argv[1:]
@@ -409,7 +427,8 @@ def main():
 	video_dir = arg(args, 0, "videos")
 	output_file = arg(args, 1, "output.csv")
 	csv_file = arg(args, 2, "")
-	process_all_videos(csv_file, video_dir, output_file)
+	if valid_video_input_dir(video_dir):
+		process_all_videos(csv_file, video_dir, output_file)
 
 if __name__ == "__main__":
 	main()
