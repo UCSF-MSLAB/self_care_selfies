@@ -298,9 +298,9 @@ def compute_average_velocity(track: list[Point2D]) -> float:
 
     FIX vs original: denominator is N-1 (number of inter-frame intervals),
     not N (number of frames).
-    
+
     Note: This assumes consecutive detections. If landmark detection is intermittent
-    (gaps where the landmark is not detected), velocity calculations will treat 
+    (gaps where the landmark is not detected), velocity calculations will treat
     detected positions as consecutive even if they span multiple frames, which may
     overestimate velocity. Consider filtering tracks with too many gaps if this
     affects your analysis.
@@ -347,11 +347,12 @@ def compute_velocity_peaks(track: list[Point2D]) -> float:
     Direction-reversal rate in the velocity signal.
 
     Returns: count_of_reversals / len(track)
-    
+
     Note: This normalizes by the number of detected landmark positions (len(track)),
     not by the total number of video frames. If some frames don't detect the landmark,
     len(track) may be less than the total frame count. This metric represents reversal
-    density per detected position, not per video frame.
+    density per detected position, not per video frame. This differs from frame-based
+    normalization used in the original 2022 implementation.
     """
     velocities = _inter_frame_velocities(track)
     reversals = _count_direction_reversals(velocities)
@@ -456,7 +457,9 @@ def _ensure_model(url: str, filename: str, model_dir: Path | None = None) -> str
                 with open(model_path, "wb") as out_file:
                     out_file.write(response.read())
         except (urllib.error.URLError, OSError, TimeoutError) as e:
-            log.error("Failed to download model: %s", e)
+            log.error(
+                "Failed to download model %s from %s: %s", filename, url, e
+            )
             raise
             
         log.info("Download complete.")
@@ -968,7 +971,8 @@ def _process_from_csv(
             return all_metrics, 0, 0
         
         # start=2 to align row_index with physical line numbers in the CSV file
-        # (line 1 is the header, data rows start at line 2) for better error reporting
+        # (line 1 is the header, data rows start at line 2). This allows error messages
+        # to reference the actual line number users see when opening the file.
         for row_index, row in enumerate(reader, start=2):
             participant = row["participant"]
             activity_date = row["date"]
@@ -1070,6 +1074,7 @@ def process_all_videos(
     
     # Sort rows by named columns to avoid depending on positional column order.
     # This is more robust if _CSV_HEADERS changes (e.g., columns re-ordered or added).
+    # Note: sort_columns are guaranteed to be in _CSV_HEADERS by the module design.
     sort_columns = ("activity", "hand", "landmark", "participant", "date")
     sort_indices = [_CSV_HEADERS.index(col) for col in sort_columns]
     all_rows.sort(key=lambda r: tuple(r[i] for i in sort_indices))
@@ -1119,8 +1124,8 @@ Setup (venv alternative):
   python3.13 -m venv .venv && source .venv/bin/activate
   pip install -r requirements.txt
 
-Note: mediapipe is not available via conda/conda-forge and must be installed with
-pip, even in conda environments.
+Note: mediapipe must be installed with pip (it is not available via conda/conda-forge),
+even when using conda environments.
 
 Examples:
   # crawl 'videos/' directory, write to output.csv
