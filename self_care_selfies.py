@@ -415,7 +415,10 @@ def _compute_sha256(file_path: Path) -> str:
     """Compute SHA256 checksum of a file."""
     sha256 = hashlib.sha256()
     with open(file_path, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
+        while True:
+            chunk = f.read(8192)
+            if not chunk:
+                break
             sha256.update(chunk)
     return sha256.hexdigest()
 
@@ -447,14 +450,13 @@ def _ensure_model(url: str, filename: str, model_dir: Path | None = None) -> str
             req = urllib.request.Request(
                 url, headers={"User-Agent": f"self_care_selfies/{__version__}"}
             )
-            with urllib.request.urlopen(req, timeout=_DOWNLOAD_TIMEOUT, context=ssl_context) as response:
+            with urllib.request.urlopen(
+                req, timeout=_DOWNLOAD_TIMEOUT, context=ssl_context
+            ) as response:
                 with open(model_path, "wb") as out_file:
                     out_file.write(response.read())
-        except urllib.error.URLError as e:
+        except (urllib.error.URLError, OSError, TimeoutError) as e:
             log.error("Failed to download model: %s", e)
-            raise
-        except (OSError, TimeoutError) as e:
-            log.error("Network or I/O error during model download: %s", e)
             raise
             
         log.info("Download complete.")
@@ -725,9 +727,11 @@ def analyze_video_file(
                 codecs_to_try = ["avc1", "mp4v"]
                 for codec in codecs_to_try:
                     fourcc = cv2.VideoWriter_fourcc(*codec)
-                    vw = cv2.VideoWriter(str(out_path), fourcc, fps_value, (w, h))
-                    if vw.isOpened():
-                        video_writer = vw
+                    temp_writer = cv2.VideoWriter(
+                        str(out_path), fourcc, fps_value, (w, h)
+                    )
+                    if temp_writer.isOpened():
+                        video_writer = temp_writer
                         log.info(
                             "Saving annotated video to %s using codec %s",
                             out_path,
@@ -735,7 +739,7 @@ def analyze_video_file(
                         )
                         break
                     # Clean up a writer that failed to open
-                    vw.release()
+                    temp_writer.release()
 
                 if video_writer is None:
                     log.error(
@@ -963,7 +967,8 @@ def _process_from_csv(
             )
             return all_metrics, 0, 0
         
-        # start=2 because DictReader reads the header as line 1; data rows start at line 2
+        # start=2 to align row_index with physical line numbers in the CSV file
+        # (line 1 is the header, data rows start at line 2) for better error reporting
         for row_index, row in enumerate(reader, start=2):
             participant = row["participant"]
             activity_date = row["date"]
