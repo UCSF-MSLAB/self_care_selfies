@@ -145,10 +145,12 @@ _POSE_MODEL_URL = (
 )
 
 # SHA256 checksums for model integrity verification
-# These checksums were obtained from official MediaPipe model releases
-_MODEL_CHECKSUMS = {
-    "hand_landmarker.task": "4b3f207a3d6f0e5ec1b8b0b9c6f2e3a1b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9",
-    "pose_landmarker_lite.task": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2",
+# TODO: Populate with actual checksums from official MediaPipe releases.
+# For now, checksum verification is skipped with a warning logged.
+# To enable verification, download models manually and compute their SHA256 hashes.
+_MODEL_CHECKSUMS: dict[str, str] = {
+    # "hand_landmarker.task": "actual_sha256_hash_here",
+    # "pose_landmarker_lite.task": "actual_sha256_hash_here",
 }
 
 # Download timeout in seconds
@@ -1058,7 +1060,7 @@ def process_all_videos(
     # This is more robust if _CSV_HEADERS changes (e.g., columns re-ordered or added).
     sort_columns = ("activity", "hand", "landmark", "participant", "date")
     sort_indices = [_CSV_HEADERS.index(col) for col in sort_columns]
-    all_rows.sort(key=lambda r, idx=sort_indices: tuple(r[i] for i in idx))
+    all_rows.sort(key=lambda r: tuple(r[i] for i in sort_indices))
 
     with open(output_file, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
