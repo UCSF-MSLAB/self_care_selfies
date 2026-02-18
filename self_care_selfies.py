@@ -83,11 +83,15 @@ Change Log (vs 2022 original)
 
 from __future__ import annotations
 
+__version__ = "1.0"
+
 import argparse
 import csv
+import hashlib
 import logging
 import math
 import os
+import ssl
 import sys
 import urllib.request
 from dataclasses import dataclass, field
@@ -103,12 +107,21 @@ from mediapipe.tasks.python.vision import HandLandmarksConnections, PoseLandmark
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
 log = logging.getLogger(__name__)
+
+
+def setup_logging(level: int = logging.INFO) -> None:
+    """Configure root logging for CLI-style use.
+
+    This function is intentionally not called at import time so that
+    applications importing this module remain in control of logging
+    configuration. Call it explicitly from a CLI entry point if needed.
+    """
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -132,6 +145,22 @@ _POSE_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/pose_landmarker/"
     "pose_landmarker_lite/float16/1/pose_landmarker_lite.task"
 )
+
+# SHA256 checksums for model integrity verification
+# TODO: Populate with actual checksums from official MediaPipe releases.
+# For now, checksum verification is skipped with a warning logged.
+# To enable verification, download models manually and compute their SHA256 hashes.
+_MODEL_CHECKSUMS: dict[str, str] = {
+    # "hand_landmarker.task": "actual_sha256_hash_here",
+    # "pose_landmarker_lite.task": "actual_sha256_hash_here",
+}
+
+# Download timeout in seconds
+_DOWNLOAD_TIMEOUT = 300  # 5 minutes
+
+# Default video segment boundaries
+_DEFAULT_START_SEC = 0.0
+_DEFAULT_END_SEC = float("inf")
 
 # ---------------------------------------------------------------------------
 # Landmark dictionaries
@@ -265,10 +294,16 @@ def compute_total_travel(track: list[Point2D]) -> float:
 
 def compute_average_velocity(track: list[Point2D]) -> float:
     """
-    Mean per-frame displacement: total_travel / (N - 1) intervals.
+    Mean per-interval displacement: total_travel / (N - 1) intervals.
 
     FIX vs original: denominator is N-1 (number of inter-frame intervals),
     not N (number of frames).
+
+    Note: This assumes consecutive detections. If landmark detection is intermittent
+    (gaps where the landmark is not detected), velocity calculations will treat
+    detected positions as consecutive even if they span multiple frames, which may
+    overestimate velocity. Consider filtering tracks with too many gaps if this
+    affects your analysis.
     """
     n_intervals = len(track) - 1
     if n_intervals <= 0:
@@ -311,8 +346,13 @@ def compute_velocity_peaks(track: list[Point2D]) -> float:
     """
     Direction-reversal rate in the velocity signal.
 
-    Returns: count_of_reversals / num_frames  (normalised by frame count
-    so the metric is comparable across videos of different durations).
+    Returns: count_of_reversals / len(track)
+
+    Note: This normalizes by the number of detected landmark positions (len(track)),
+    not by the total number of video frames. If some frames don't detect the landmark,
+    len(track) may be less than the total frame count. This metric represents reversal
+    density per detected position, not per video frame. This differs from frame-based
+    normalization used in the original 2022 implementation.
     """
     velocities = _inter_frame_velocities(track)
     reversals = _count_direction_reversals(velocities)
@@ -372,21 +412,78 @@ class VideoAnalysisResult:
 # ---------------------------------------------------------------------------
 # Model management
 # ---------------------------------------------------------------------------
+def _compute_sha256(file_path: Path) -> str:
+    """Compute SHA256 checksum of a file."""
+    sha256 = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        while True:
+            chunk = f.read(8192)
+            if not chunk:
+                break
+            sha256.update(chunk)
+    return sha256.hexdigest()
+
+
 def _ensure_model(url: str, filename: str, model_dir: Path | None = None) -> str:
     """
     Return path to a model file, downloading it if necessary.
 
     Downloads to model_dir (default: ~/.cache/self_care_selfies/models/).
+    Uses SSL verification and timeout for secure downloads.
+    
+    Note: Checksum verification is skipped if no checksum is defined for the model.
+    To enable checksum verification, update _MODEL_CHECKSUMS with the correct hash.
     """
     cache_dir = model_dir or _MODEL_CACHE_DIR
     cache_dir.mkdir(parents=True, exist_ok=True)
     model_path = cache_dir / filename
+    
     if not model_path.exists():
         log.info("Downloading model %s ...", filename)
         log.info("  from: %s", url)
         log.info("  to:   %s", model_path)
-        urllib.request.urlretrieve(url, model_path)
+        
+        # Create SSL context with certificate verification enabled
+        ssl_context = ssl.create_default_context()
+        
+        # Download with SSL verification and timeout
+        try:
+            req = urllib.request.Request(
+                url, headers={"User-Agent": f"self_care_selfies/{__version__}"}
+            )
+            with urllib.request.urlopen(
+                req, timeout=_DOWNLOAD_TIMEOUT, context=ssl_context
+            ) as response:
+                with open(model_path, "wb") as out_file:
+                    out_file.write(response.read())
+        except (urllib.error.URLError, OSError, TimeoutError) as e:
+            log.error(
+                "Failed to download model %s from %s: %s", filename, url, e
+            )
+            raise
+            
         log.info("Download complete.")
+        
+        # Verify checksum if available
+        expected_checksum = _MODEL_CHECKSUMS.get(filename)
+        if expected_checksum:
+            log.info("Verifying file integrity...")
+            actual_checksum = _compute_sha256(model_path)
+            if actual_checksum != expected_checksum:
+                model_path.unlink()  # Remove corrupted file
+                raise ValueError(
+                    f"Checksum mismatch for {filename}. "
+                    f"Expected: {expected_checksum}, Got: {actual_checksum}. "
+                    "The downloaded file may be corrupted or compromised."
+                )
+            log.info("Checksum verified successfully.")
+        else:
+            log.warning(
+                "No checksum defined for %s; skipping integrity verification. "
+                "Consider adding a checksum to _MODEL_CHECKSUMS for security.",
+                filename
+            )
+    
     return str(model_path)
 
 
@@ -458,8 +555,8 @@ def _draw_pose_landmarks(image, result: mp_vision.PoseLandmarkerResult) -> None:
 
 def _frames_from_video(
     video_path: str,
-    start_sec: float = 0.0,
-    end_sec: float = float("inf"),
+    start_sec: float = _DEFAULT_START_SEC,
+    end_sec: float = _DEFAULT_END_SEC,
 ) -> Iterator[tuple[int, float, float, object]]:
     """
     Yield (frame_index, timestamp_ms, fps, bgr_frame) for each video frame
@@ -468,12 +565,20 @@ def _frames_from_video(
     FIX vs original: timestamp in seconds = frame_index / fps (not frame * fps / 1000).
     """
     cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise IOError(f"Cannot open video: {video_path}")
-
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0  # default to 30 if unreadable
-    frame_idx = 0
     try:
+        if not cap.isOpened():
+            raise IOError(f"Cannot open video: {video_path}")
+
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if not fps or fps <= 0:
+            log.warning(
+                "FPS metadata missing or invalid for video '%s'; "
+                "defaulting to 30.0 FPS. Timing and velocity estimates may be inaccurate.",
+                video_path,
+            )
+            fps = 30.0
+        frame_idx = 0
+        
         while True:
             success, frame = cap.read()
             if not success:
@@ -500,8 +605,8 @@ def analyze_video_file(
     activity: str,
     participant: str = "unknown",
     activity_date: str = "unknown",
-    start_sec: float = 0.0,
-    end_sec: float = float("inf"),
+    start_sec: float = _DEFAULT_START_SEC,
+    end_sec: float = _DEFAULT_END_SEC,
     hand_model_path: str | None = None,
     pose_model_path: str | None = None,
     display: bool = False,
@@ -537,6 +642,9 @@ def analyze_video_file(
 
     # Pre-allocate per-landmark tracking lists, keyed by (hand_label, landmark_idx).
     # "hand_label" is "Left", "Right" for hand modality; "Pose" for pose.
+    # Note: This pre-allocates tracks for all landmarks (21 for hands, 33 for pose),
+    # even though metrics are only computed for the subset in config.features.
+    # For large-scale processing, consider optimizing to only allocate needed landmarks.
     n_landmarks = (
         len(HAND_LANDMARKS) if config.modality == "hand" else len(POSE_LANDMARKS)
     )
@@ -617,11 +725,32 @@ def analyze_video_file(
                     / f"{activity}_annotated.mp4"
                 )
                 out_path.parent.mkdir(parents=True, exist_ok=True)
-                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-                video_writer = cv2.VideoWriter(
-                    str(out_path), fourcc, fps_value, (w, h)
-                )
-                log.info("Saving annotated video to %s", out_path)
+                
+                # Prefer H.264/avc1 for better compatibility, with mp4v fallback
+                codecs_to_try = ["avc1", "mp4v"]
+                for codec in codecs_to_try:
+                    fourcc = cv2.VideoWriter_fourcc(*codec)
+                    temp_writer = cv2.VideoWriter(
+                        str(out_path), fourcc, fps_value, (w, h)
+                    )
+                    if temp_writer.isOpened():
+                        video_writer = temp_writer
+                        log.info(
+                            "Saving annotated video to %s using codec %s",
+                            out_path,
+                            codec,
+                        )
+                        break
+                    # Clean up a writer that failed to open
+                    temp_writer.release()
+
+                if video_writer is None:
+                    log.error(
+                        "Failed to initialize VideoWriter for %s with codecs %s; "
+                        "annotated video will not be saved.",
+                        out_path,
+                        ", ".join(codecs_to_try),
+                    )
 
             if video_writer is not None:
                 video_writer.write(bgr_frame)
@@ -753,12 +882,15 @@ def _crawl_video_dir(
     video_dir: str,
     ignore_set: set[str],
     **analysis_kwargs,
-) -> list[dict]:
+) -> tuple[list[dict], int, int]:
     """
     Walk video_dir (expected structure: video_dir/<participant>/<date>/<activity>.*),
-    skip videos already in ignore_set, and return a flat list of metrics dicts.
+    skip videos already in ignore_set, and return a tuple of:
+    (metrics list, success count, failure count).
     """
     all_metrics: list[dict] = []
+    success_count = 0
+    failure_count = 0
     video_dir_path = Path(video_dir).resolve()
 
     for path in sorted(video_dir_path.rglob("*")):
@@ -794,33 +926,80 @@ def _crawl_video_dir(
                 **analysis_kwargs,
             )
             all_metrics.extend(result.metrics)
+            success_count += 1
         except Exception as exc:
             log.error("Failed to process %s: %s", path, exc)
+            failure_count += 1
 
-    return all_metrics
+    return all_metrics, success_count, failure_count
 
 
 def _process_from_csv(
     input_csv: str,
     video_dir: str,
     **analysis_kwargs,
-) -> list[dict]:
+) -> tuple[list[dict], int, int]:
     """
     Process a scheduled list of videos defined in a CSV manifest.
 
     Expected columns: participant, date, activity, extension,
                       start_sec, end_sec
+                      
+    Returns: (metrics list, success count, failure count)
     """
     all_metrics: list[dict] = []
+    success_count = 0
+    failure_count = 0
     with open(input_csv, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
-        for row in reader:
+        
+        # Validate required columns exist
+        required_columns = {"participant", "date", "activity"}
+        if reader.fieldnames is None:
+            log.error("CSV file %s appears to be empty or malformed", input_csv)
+            return all_metrics, 0, 0
+            
+        missing_columns = required_columns - set(reader.fieldnames)
+        if missing_columns:
+            log.error(
+                "CSV file %s is missing required columns: %s. "
+                "Required columns are: %s",
+                input_csv,
+                ", ".join(sorted(missing_columns)),
+                ", ".join(sorted(required_columns)),
+            )
+            return all_metrics, 0, 0
+        
+        # start=2 to align row_index with physical line numbers in the CSV file
+        # (line 1 is the header, data rows start at line 2). This allows error messages
+        # to reference the actual line number users see when opening the file.
+        for row_index, row in enumerate(reader, start=2):
             participant = row["participant"]
             activity_date = row["date"]
             activity = row["activity"]
             ext = row.get("extension", "mp4").lstrip(".")
-            start_sec = float(row.get("start_sec", 0))
-            end_sec = float(row.get("end_sec", float("inf")))
+            raw_start = row.get("start_sec", _DEFAULT_START_SEC)
+            raw_end = row.get("end_sec", _DEFAULT_END_SEC)
+            try:
+                start_sec = float(raw_start)
+            except (TypeError, ValueError):
+                log.error(
+                    "Invalid numeric value for start_sec in CSV %s at data row %d: %r",
+                    input_csv,
+                    row_index,
+                    raw_start,
+                )
+                continue
+            try:
+                end_sec = float(raw_end)
+            except (TypeError, ValueError):
+                log.error(
+                    "Invalid numeric value for end_sec in CSV %s at data row %d: %r",
+                    input_csv,
+                    row_index,
+                    raw_end,
+                )
+                continue
 
             video_path = (
                 Path(video_dir) / participant / activity_date / f"{activity}.{ext}"
@@ -844,10 +1023,12 @@ def _process_from_csv(
                     **analysis_kwargs,
                 )
                 all_metrics.extend(result.metrics)
+                success_count += 1
             except Exception as exc:
                 log.error("Failed to process %s: %s", video_path, exc)
+                failure_count += 1
 
-    return all_metrics
+    return all_metrics, success_count, failure_count
 
 
 def process_all_videos(
@@ -873,11 +1054,15 @@ def process_all_videos(
     )
 
     if input_csv:
-        new_metrics = _process_from_csv(input_csv, video_dir, **analysis_kwargs)
+        new_metrics, success_count, failure_count = _process_from_csv(
+            input_csv, video_dir, **analysis_kwargs
+        )
         existing_rows: list[list] = []
     else:
         ignore_set, existing_rows = _read_existing_output(output_file)
-        new_metrics = _crawl_video_dir(video_dir, ignore_set, **analysis_kwargs)
+        new_metrics, success_count, failure_count = _crawl_video_dir(
+            video_dir, ignore_set, **analysis_kwargs
+        )
 
     # Convert new metric dicts to rows, filling any missing columns with ""
     new_rows = [
@@ -886,7 +1071,13 @@ def process_all_videos(
     ]
 
     all_rows = existing_rows + new_rows
-    all_rows.sort(key=lambda r: tuple(r[:5]))  # sort by activity,hand,landmark,participant,date
+    
+    # Sort rows by named columns to avoid depending on positional column order.
+    # This is more robust if _CSV_HEADERS changes (e.g., columns re-ordered or added).
+    # Note: sort_columns are guaranteed to be in _CSV_HEADERS by the module design.
+    sort_columns = ("activity", "hand", "landmark", "participant", "date")
+    sort_indices = [_CSV_HEADERS.index(col) for col in sort_columns]
+    all_rows.sort(key=lambda r: tuple(r[i] for i in sort_indices))
 
     with open(output_file, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -897,6 +1088,19 @@ def process_all_videos(
         "Wrote %d total rows (%d new) to %s",
         len(all_rows), len(new_rows), output_file,
     )
+    
+    # Log processing summary
+    total_videos = success_count + failure_count
+    if total_videos > 0:
+        log.info(
+            "Processing complete: %d videos succeeded, %d videos failed (total: %d)",
+            success_count, failure_count, total_videos
+        )
+        if failure_count > 0:
+            log.warning(
+                "Review log for details on the %d failed video(s).",
+                failure_count
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -920,7 +1124,8 @@ Setup (venv alternative):
   python3.13 -m venv .venv && source .venv/bin/activate
   pip install -r requirements.txt
 
-Note: mediapipe is NOT on conda-forge; pip is required regardless of env type.
+Note: mediapipe must be installed with pip (it is not available via conda/conda-forge),
+even when using conda environments.
 
 Examples:
   # crawl 'videos/' directory, write to output.csv
@@ -986,6 +1191,8 @@ Examples:
 
 
 def main() -> None:
+    setup_logging()  # Configure logging for CLI use
+    
     parser = build_parser()
     args = parser.parse_args()
 
