@@ -83,6 +83,8 @@ Change Log (vs 2022 original)
 
 from __future__ import annotations
 
+__version__ = "1.0"
+
 import argparse
 import csv
 import hashlib
@@ -155,6 +157,10 @@ _MODEL_CHECKSUMS: dict[str, str] = {
 
 # Download timeout in seconds
 _DOWNLOAD_TIMEOUT = 300  # 5 minutes
+
+# Default video segment boundaries
+_DEFAULT_START_SEC = 0.0
+_DEFAULT_END_SEC = float("inf")
 
 # ---------------------------------------------------------------------------
 # Landmark dictionaries
@@ -438,15 +444,17 @@ def _ensure_model(url: str, filename: str, model_dir: Path | None = None) -> str
         
         # Download with SSL verification and timeout
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "self_care_selfies/1.0"})
+            req = urllib.request.Request(
+                url, headers={"User-Agent": f"self_care_selfies/{__version__}"}
+            )
             with urllib.request.urlopen(req, timeout=_DOWNLOAD_TIMEOUT, context=ssl_context) as response:
                 with open(model_path, "wb") as out_file:
                     out_file.write(response.read())
         except urllib.error.URLError as e:
             log.error("Failed to download model: %s", e)
             raise
-        except Exception as e:
-            log.error("Unexpected error during model download: %s", e)
+        except (OSError, TimeoutError) as e:
+            log.error("Network or I/O error during model download: %s", e)
             raise
             
         log.info("Download complete.")
@@ -542,8 +550,8 @@ def _draw_pose_landmarks(image, result: mp_vision.PoseLandmarkerResult) -> None:
 
 def _frames_from_video(
     video_path: str,
-    start_sec: float = 0.0,
-    end_sec: float = float("inf"),
+    start_sec: float = _DEFAULT_START_SEC,
+    end_sec: float = _DEFAULT_END_SEC,
 ) -> Iterator[tuple[int, float, float, object]]:
     """
     Yield (frame_index, timestamp_ms, fps, bgr_frame) for each video frame
@@ -592,8 +600,8 @@ def analyze_video_file(
     activity: str,
     participant: str = "unknown",
     activity_date: str = "unknown",
-    start_sec: float = 0.0,
-    end_sec: float = float("inf"),
+    start_sec: float = _DEFAULT_START_SEC,
+    end_sec: float = _DEFAULT_END_SEC,
     hand_model_path: str | None = None,
     pose_model_path: str | None = None,
     display: bool = False,
@@ -718,7 +726,7 @@ def analyze_video_file(
                 for codec in codecs_to_try:
                     fourcc = cv2.VideoWriter_fourcc(*codec)
                     vw = cv2.VideoWriter(str(out_path), fourcc, fps_value, (w, h))
-                    if vw is not None and vw.isOpened():
+                    if vw.isOpened():
                         video_writer = vw
                         log.info(
                             "Saving annotated video to %s using codec %s",
@@ -727,8 +735,7 @@ def analyze_video_file(
                         )
                         break
                     # Clean up a writer that failed to open
-                    if vw is not None:
-                        vw.release()
+                    vw.release()
 
                 if video_writer is None:
                     log.error(
@@ -962,8 +969,8 @@ def _process_from_csv(
             activity_date = row["date"]
             activity = row["activity"]
             ext = row.get("extension", "mp4").lstrip(".")
-            raw_start = row.get("start_sec", 0)
-            raw_end = row.get("end_sec", float("inf"))
+            raw_start = row.get("start_sec", _DEFAULT_START_SEC)
+            raw_end = row.get("end_sec", _DEFAULT_END_SEC)
             try:
                 start_sec = float(raw_start)
             except (TypeError, ValueError):
@@ -1107,8 +1114,8 @@ Setup (venv alternative):
   python3.13 -m venv .venv && source .venv/bin/activate
   pip install -r requirements.txt
 
-Note: mediapipe is NOT available via conda/conda-forge; you must install it with
-pip (as shown above), even when working inside a conda environment.
+Note: mediapipe is not available via conda/conda-forge and must be installed with
+pip, even in conda environments.
 
 Examples:
   # crawl 'videos/' directory, write to output.csv
