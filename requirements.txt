@@ -1,0 +1,28 @@
+# Self Care Selfies — Python dependencies
+#
+# Python version: 3.11 or 3.13 recommended.
+# mediapipe 0.10.30+ ships as universal py3 wheels and supports Python 3.13.
+# Earlier mediapipe releases (<=0.10.21) capped at Python 3.12.
+# mediapipe is NOT available on conda-forge; install via pip inside a conda env.
+#
+# ---- Recommended setup (conda) ----
+#   conda create -n selfie_video python=3.13
+#   conda activate selfie_video
+#   pip install -r requirements.txt
+#
+# ---- Alternative setup (venv) ----
+#   python3.13 -m venv .venv
+#   source .venv/bin/activate
+#   pip install -r requirements.txt
+#
+# For headless / server environments (no display), replace opencv-python
+# with opencv-python-headless:
+#   pip install opencv-python-headless
+
+# Core vision processing — 0.10.30+ required for Python 3.13 support.
+# Switched to universal py3 wheels in 0.10.30 (January 2026).
+# Not available on conda-forge; must be installed via pip.
+mediapipe>=0.10.30
+
+# Video I/O.  Use opencv-python-headless on servers without a display.
+opencv-python>=4.8.0
