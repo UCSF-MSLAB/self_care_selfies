@@ -1,0 +1,47 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# ── Virtual environments ───────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+.env/
+
+# ── mediapipe model bundles (auto-downloaded at runtime) ───────────────────────
+*.task
+models/
+
+# ── Annotated video output ────────────────────────────────────────────────────
+annotated/
+*_annotated.mp4
+
+# ── Patient video data (do not commit PHI/video files) ───────────────────────
+videos/
+*.mp4
+*.mov
+*.avi
+*.mkv
+
+# ── Analysis output ───────────────────────────────────────────────────────────
+# output.csv is committed as an empty header template; real results stay local
+results/
+*_results.csv
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ── VS Code ───────────────────────────────────────────────────────────────────
+.vscode/
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
